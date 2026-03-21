@@ -27,17 +27,36 @@ const serviceSchema = z.object({
   tax: z.number().min(0).default(0),
 });
 
+const addOnSchema = z.object({
+  name: z.string().min(2),
+  price: z.number().min(0),
+  duration: z.number().int().min(0).default(0),
+});
+
+const promoCodeSchema = z.object({
+  code: z.string().min(3).toUpperCase(),
+  discountPercent: z.number().min(1).max(100),
+  maxUses: z.number().int().min(1).optional(),
+  validUntil: z.string().optional(),
+});
+
 const timeSlotSchema = z.object({
-  date: z.string(), // ISO date string
+  date: z.string(),
   startTime: z.string(),
   endTime: z.string(),
+  title: z.string().optional(),
+  description: z.string().optional(),
+  serviceId: z.string().optional(),
 });
 
 const bulkSlotSchema = z.object({
   date: z.string(),
+  serviceId: z.string().optional(),
   slots: z.array(z.object({
     startTime: z.string(),
     endTime: z.string(),
+    title: z.string().optional(),
+    description: z.string().optional(),
   })),
 });
 
@@ -50,12 +69,17 @@ export const getProviderProfile = asyncHandler(async (req: any, res: Response) =
     where: { id },
     include: {
       user: { select: { id: true, name: true, email: true, avatar: true, contactNo: true } },
-      services: { where: { isActive: true }, orderBy: { createdAt: 'desc' } },
+      services: { 
+        where: { isActive: true }, 
+        include: { addOns: { where: { isActive: true } } },
+        orderBy: { createdAt: 'desc' } 
+      },
       reviews: {
         include: { customer: { select: { name: true, avatar: true } } },
         orderBy: { createdAt: 'desc' },
         take: 5,
       },
+      promoCodes: { where: { isActive: true } },
       _count: { select: { appointments: true, reviews: true } },
     },
   });
@@ -132,6 +156,96 @@ export const deleteService = asyncHandler(async (req: AuthRequest, res: Response
   res.json({ success: true, message: 'Service deactivated' });
 });
 
+// ─── ADD SERVICE ADD-ON ──────────────────────────────────
+
+export const addServiceAddOn = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const serviceId = req.params.serviceId as string;
+  const data = addOnSchema.parse(req.body);
+
+  const service = await prisma.service.findUnique({ where: { id: serviceId } });
+  if (!service) throw new AppError('Service not found', 404);
+
+  const provider = await prisma.serviceProvider.findUnique({ where: { userId: req.user.id } });
+  if (!provider || service.providerId !== provider.id) throw new AppError('Unauthorized', 403);
+
+  const addOn = await prisma.serviceAddOn.create({
+    data: { ...data, serviceId },
+  });
+
+  res.status(201).json({ success: true, addOn });
+});
+
+// ─── UPDATE SERVICE ADD-ON ───────────────────────────────
+
+export const updateServiceAddOn = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const id = req.params.id as string;
+  const data = addOnSchema.partial().parse(req.body);
+
+  const addOn = await prisma.serviceAddOn.findUnique({ where: { id }, include: { service: true } });
+  if (!addOn) throw new AppError('Add-on not found', 404);
+
+  const provider = await prisma.serviceProvider.findUnique({ where: { userId: req.user.id } });
+  if (!provider || addOn.service.providerId !== provider.id) throw new AppError('Unauthorized', 403);
+
+  const updated = await prisma.serviceAddOn.update({ where: { id }, data });
+  res.json({ success: true, addOn: updated });
+});
+
+// ─── DELETE SERVICE ADD-ON ───────────────────────────────
+
+export const deleteServiceAddOn = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const id = req.params.id as string;
+
+  const addOn = await prisma.serviceAddOn.findUnique({ where: { id }, include: { service: true } });
+  if (!addOn) throw new AppError('Add-on not found', 404);
+
+  const provider = await prisma.serviceProvider.findUnique({ where: { userId: req.user.id } });
+  if (!provider || addOn.service.providerId !== provider.id) throw new AppError('Unauthorized', 403);
+
+  await prisma.serviceAddOn.update({ where: { id }, data: { isActive: false } });
+  res.json({ success: true, message: 'Add-on deactivated' });
+});
+
+// ─── CREATE PROMO CODE ───────────────────────────────────
+
+export const createPromoCode = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const data = promoCodeSchema.parse(req.body);
+
+  const provider = await prisma.serviceProvider.findUnique({ where: { userId: req.user.id } });
+  if (!provider) throw new AppError('Provider profile not found', 404);
+
+  const existing = await prisma.promoCode.findFirst({
+    where: { providerId: provider.id, code: data.code }
+  });
+  if (existing) throw new AppError('Promo code already exists', 400);
+
+  const promoCode = await prisma.promoCode.create({
+    data: {
+      ...data,
+      providerId: provider.id,
+      validUntil: data.validUntil ? new Date(data.validUntil) : null,
+    },
+  });
+
+  res.status(201).json({ success: true, promoCode });
+});
+
+// ─── DELETE PROMO CODE ───────────────────────────────────
+
+export const deletePromoCode = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const id = req.params.id as string;
+
+  const promoCode = await prisma.promoCode.findUnique({ where: { id } });
+  if (!promoCode) throw new AppError('Promo code not found', 404);
+
+  const provider = await prisma.serviceProvider.findUnique({ where: { userId: req.user.id } });
+  if (!provider || promoCode.providerId !== provider.id) throw new AppError('Unauthorized', 403);
+
+  // Soft delete
+  await prisma.promoCode.update({ where: { id }, data: { isActive: false } });
+  res.json({ success: true, message: 'Promo code deactivated' });
+});
+
 // ─── ADD TIME SLOT ───────────────────────────────────────
 
 export const addTimeSlot = asyncHandler(async (req: AuthRequest, res: Response) => {
@@ -146,7 +260,11 @@ export const addTimeSlot = asyncHandler(async (req: AuthRequest, res: Response) 
       date: new Date(data.date),
       startTime: new Date(data.startTime),
       endTime: new Date(data.endTime),
+      title: data.title || null,
+      description: data.description || null,
+      serviceId: data.serviceId || null,
     },
+    include: { service: { select: { id: true, name: true, category: true } } },
   });
 
   res.status(201).json({ success: true, slot });
@@ -166,6 +284,9 @@ export const addBulkTimeSlots = asyncHandler(async (req: AuthRequest, res: Respo
       date: new Date(data.date),
       startTime: new Date(s.startTime),
       endTime: new Date(s.endTime),
+      title: s.title || null,
+      description: s.description || null,
+      serviceId: data.serviceId || null,
     })),
   });
 
@@ -176,18 +297,26 @@ export const addBulkTimeSlots = asyncHandler(async (req: AuthRequest, res: Respo
 
 export const getTimeSlots = asyncHandler(async (req: any, res: Response) => {
   const providerId = req.params.providerId as string;
-  const { date } = req.query;
+  const { date, endDate } = req.query;
 
-  const where: any = { providerId, isAvailable: true };
+  const where: any = { providerId };
   if (date) {
     const d = new Date(String(date));
-    const nextDay = new Date(d);
-    nextDay.setDate(nextDay.getDate() + 1);
-    where.date = { gte: d, lt: nextDay };
+    if (endDate) {
+      // Range query: return all slots between date and endDate
+      const ed = new Date(String(endDate));
+      ed.setDate(ed.getDate() + 1);
+      where.date = { gte: d, lt: ed };
+    } else {
+      const nextDay = new Date(d);
+      nextDay.setDate(nextDay.getDate() + 1);
+      where.date = { gte: d, lt: nextDay };
+    }
   }
 
   const slots = await prisma.timeSlot.findMany({
     where,
+    include: { service: { select: { id: true, name: true, category: true } } },
     orderBy: { startTime: 'asc' },
   });
 
@@ -247,4 +376,60 @@ export const getDashboardStats = asyncHandler(async (req: AuthRequest, res: Resp
     },
     recentAppointments,
   });
+});
+
+// ─── PROVIDER ANALYTICS (TIME-SERIES) ────────────────────
+
+export const getProviderAnalytics = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const provider = await prisma.serviceProvider.findUnique({ where: { userId: req.user.id } });
+  if (!provider) throw new AppError('Provider profile not found', 404);
+
+  // Get data for the last 30 days
+  const thirtyDaysAgo = new Date();
+  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+  const appointments = await prisma.appointment.findMany({
+    where: { 
+      providerId: provider.id,
+      createdAt: { gte: thirtyDaysAgo }
+    },
+    select: {
+      status: true,
+      createdAt: true,
+      amount: true,
+      totalAmount: true,
+      payment: { select: { status: true } }
+    }
+  });
+
+  // Group by day (YYYY-MM-DD)
+  const dailyData: Record<string, { bookings: number, revenue: number }> = {};
+  
+  // Initialize last 30 days with 0
+  for (let i = 29; i >= 0; i--) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    const dateStr = d.toISOString().split('T')[0];
+    dailyData[dateStr] = { bookings: 0, revenue: 0 };
+  }
+
+  appointments.forEach(appt => {
+    const dateStr = appt.createdAt.toISOString().split('T')[0];
+    if (dailyData[dateStr]) {
+      dailyData[dateStr].bookings += 1;
+      
+      // Calculate revenue (only consider successful or completed payments/appointments for revenue)
+      if (appt.payment?.status === 'SUCCESS' || appt.status === 'COMPLETED') {
+         dailyData[dateStr].revenue += (appt.totalAmount || appt.amount);
+      }
+    }
+  });
+
+  const chartData = Object.keys(dailyData).map(date => ({
+    date,
+    bookings: dailyData[date].bookings,
+    revenue: dailyData[date].revenue
+  }));
+
+  res.json({ success: true, analytics: chartData });
 });

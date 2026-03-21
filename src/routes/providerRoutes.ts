@@ -1,9 +1,10 @@
 import { Router } from 'express';
 import {
   getProviderProfile, updateProviderProfile,
-  addService, updateService, deleteService,
+  addService, updateService, deleteService, addServiceAddOn, updateServiceAddOn, deleteServiceAddOn,
   addTimeSlot, addBulkTimeSlots, getTimeSlots, deleteTimeSlot,
-  getDashboardStats,
+  getDashboardStats, getProviderAnalytics,
+  createPromoCode, deletePromoCode,
 } from '../controllers/providerController';
 import { authMiddleware, requireRole } from '../middlewares/authMiddleware';
 
@@ -16,11 +17,21 @@ router.get('/:providerId/slots', getTimeSlots);
 // Provider-only (requires auth + PROVIDER role)
 router.put('/profile', authMiddleware, requireRole('PROVIDER'), updateProviderProfile);
 router.get('/dashboard/stats', authMiddleware, requireRole('PROVIDER'), getDashboardStats);
+router.get('/dashboard/analytics', authMiddleware, requireRole('PROVIDER'), getProviderAnalytics);
 
 // Services CRUD
 router.post('/services', authMiddleware, requireRole('PROVIDER'), addService);
 router.put('/services/:id', authMiddleware, requireRole('PROVIDER'), updateService);
 router.delete('/services/:id', authMiddleware, requireRole('PROVIDER'), deleteService);
+
+// Service Add-Ons CRUD
+router.post('/services/:serviceId/addons', authMiddleware, requireRole('PROVIDER'), addServiceAddOn);
+router.put('/addons/:id', authMiddleware, requireRole('PROVIDER'), updateServiceAddOn);
+router.delete('/addons/:id', authMiddleware, requireRole('PROVIDER'), deleteServiceAddOn);
+
+// Promo Codes
+router.post('/promocodes', authMiddleware, requireRole('PROVIDER'), createPromoCode);
+router.delete('/promocodes/:id', authMiddleware, requireRole('PROVIDER'), deletePromoCode);
 
 // Time slots
 router.post('/slots', authMiddleware, requireRole('PROVIDER'), addTimeSlot);

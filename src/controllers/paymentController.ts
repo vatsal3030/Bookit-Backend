@@ -108,3 +108,28 @@ export const getPaymentByAppointment = asyncHandler(async (req: AuthRequest, res
   if (!payment) throw new AppError('Payment not found', 404);
   res.json({ success: true, payment });
 });
+
+// ─── GET MY PAYMENTS ─────────────────────────────────────
+
+export const getMyPayments = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const isCustomer = req.user.role === 'CUSTOMER';
+
+  const payments = await prisma.payment.findMany({
+    where: isCustomer 
+      ? { appointment: { customerId: req.user.id } }
+      : { appointment: { provider: { userId: req.user.id } } },
+    include: {
+      appointment: {
+        include: {
+          service: { select: { name: true } },
+          customer: { select: { name: true, email: true } },
+          provider: { include: { user: { select: { name: true } } } },
+        }
+      }
+    },
+    orderBy: { createdAt: 'desc' },
+    take: 100,
+  });
+
+  res.json({ success: true, payments });
+});

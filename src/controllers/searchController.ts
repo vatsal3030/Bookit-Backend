@@ -6,6 +6,8 @@ import { asyncHandler } from '../utils/errorHandler';
 
 export const searchProviders = asyncHandler(async (req: Request, res: Response) => {
   const { category, lat, lng, maxDistance, q } = req.query;
+  const page = parseInt(req.query.page as string) || 1;
+  const limit = parseInt(req.query.limit as string) || 20;
 
   // Base filter — only verified providers with active services
   const whereClause: any = {};
@@ -28,18 +30,19 @@ export const searchProviders = asyncHandler(async (req: Request, res: Response) 
     ];
   }
 
-  const providers = await prisma.serviceProvider.findMany({
-    where: whereClause,
-    include: {
-      user: { select: { id: true, name: true, avatar: true, location: true } },
-      services: { where: { isActive: true }, select: { id: true, name: true, category: true, baseFee: true, duration: true } },
-      _count: { select: { reviews: true, appointments: true } },
-    },
-    orderBy: { rating: 'desc' },
-  });
+  const baseInclude = {
+    user: { select: { id: true, name: true, avatar: true, location: true } },
+    services: { where: { isActive: true }, select: { id: true, name: true, category: true, baseFee: true, duration: true } },
+    _count: { select: { reviews: true, appointments: true } },
+  };
 
-  // Haversine distance filter if coordinates provided
+  // Haversine distance filter if coordinates provided (requires in-memory sorting/pagination)
   if (lat && lng) {
+    const providers = await prisma.serviceProvider.findMany({
+      where: whereClause,
+      include: baseInclude,
+    });
+
     const userLat = parseFloat(String(lat));
     const userLng = parseFloat(String(lng));
     const maxDist = maxDistance ? parseFloat(String(maxDistance)) : 50; // Default 50km
@@ -63,10 +66,25 @@ export const searchProviders = asyncHandler(async (req: Request, res: Response) 
       .filter(p => p.distance === null || p.distance <= maxDist)
       .sort((a, b) => (a.distance ?? 999) - (b.distance ?? 999));
 
-    return res.json({ success: true, providers: filtered });
+    const total = filtered.length;
+    const paginated = filtered.slice((page - 1) * limit, page * limit);
+    return res.json({ success: true, providers: paginated, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } });
   }
 
-  res.json({ success: true, providers });
+  // Database pagination if no geo-coordinates
+  const skip = (page - 1) * limit;
+  const [providers, total] = await Promise.all([
+    prisma.serviceProvider.findMany({
+      where: whereClause,
+      include: baseInclude,
+      orderBy: { rating: 'desc' },
+      skip,
+      take: limit,
+    }),
+    prisma.serviceProvider.count({ where: whereClause })
+  ]);
+
+  res.json({ success: true, providers, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } });
 });
 
 // ─── GET CATEGORIES ──────────────────────────────────────

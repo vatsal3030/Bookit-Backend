@@ -21,6 +21,7 @@ enum ApptStatus {
   COMPLETED
   CANCELLED
   NO_SHOW
+  RESCHEDULED
 }
 
 enum PayStatus {
@@ -66,6 +67,9 @@ model User {
   reviews         Review[]
   providerProfile ServiceProvider?
   notifications   Notification[]
+  conversationsAsUser1 Conversation[] @relation("ConversationUser1")
+  conversationsAsUser2 Conversation[] @relation("ConversationUser2")
+  messages        Message[]
 
   @@index([email])
   @@index([role])
@@ -96,6 +100,7 @@ model ServiceProvider {
   services     Service[]
   timeSlots    TimeSlot[]
   reviews      Review[]      @relation("ProviderReviews")
+  promoCodes   PromoCode[]
 
   @@index([category])
   @@index([rating])
@@ -118,9 +123,28 @@ model Service {
 
   provider     ServiceProvider @relation(fields: [providerId], references: [id], onDelete: Cascade)
   appointments Appointment[]
+  addOns       ServiceAddOn[]
+  timeSlots    TimeSlot[]
 
   @@index([providerId])
   @@index([category])
+}
+
+// ─── SERVICE ADD-ON ──────────────────────────────────────
+
+model ServiceAddOn {
+  id          String   @id @default(uuid())
+  serviceId   String
+  name        String
+  price       Float
+  duration    Int      @default(0) // Extra minutes
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  service     Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@index([serviceId])
 }
 
 // ─── TIME SLOT ───────────────────────────────────────────
@@ -128,6 +152,9 @@ model Service {
 model TimeSlot {
   id           String          @id @default(uuid())
   providerId   String
+  serviceId    String?         // optional link to specific service
+  title        String?         // e.g. "Morning Consultation"
+  description  String?         // additional details about this slot
   date         DateTime
   startTime    DateTime
   endTime      DateTime
@@ -135,6 +162,7 @@ model TimeSlot {
   createdAt    DateTime        @default(now())
 
   provider     ServiceProvider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  service      Service?        @relation(fields: [serviceId], references: [id], onDelete: SetNull)
   appointments Appointment[]
 
   @@index([providerId, date])
@@ -151,10 +179,17 @@ model Appointment {
   timeSlotId         String
   status             ApptStatus      @default(PENDING)
   notes              String?
-  amount             Float
+  amount             Float           // Base amount
+  discountAmount     Float           @default(0)
+  totalAmount        Float           @default(0) // amount + addOns - discount
+  promoCode          String?
+  addOns             Json?           // Snapshot of selected add-ons: [{ id, name, price }]
   priority           String?         @default("NORMAL")
   confirmationNo     String?         @unique
   cancellationReason String?
+  rescheduleReason   String?
+  rescheduledFrom    String?         // ID of original appointment if rescheduled
+  rescheduleAllowed  Boolean         @default(true)
   createdAt          DateTime        @default(now())
   updatedAt          DateTime        @updatedAt
   
@@ -221,4 +256,53 @@ model Notification {
   user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, isRead])
+}
+
+// ─── PROMO CODE ──────────────────────────────────────────
+
+model PromoCode {
+  id              String          @id @default(uuid())
+  providerId      String
+  code            String
+  discountPercent Float           // e.g., 10 for 10%
+  maxUses         Int?            // null = unlimited
+  currentUses     Int             @default(0)
+  validUntil      DateTime?
+  isActive        Boolean         @default(true)
+  createdAt       DateTime        @default(now())
+
+  provider        ServiceProvider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  
+  @@unique([providerId, code])
+}
+
+// ─── MESSAGING ───────────────────────────────────────────
+
+model Conversation {
+  id          String    @id @default(uuid())
+  user1Id     String
+  user2Id     String
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  user1       User      @relation("ConversationUser1", fields: [user1Id], references: [id], onDelete: Cascade)
+  user2       User      @relation("ConversationUser2", fields: [user2Id], references: [id], onDelete: Cascade)
+  messages    Message[]
+
+  @@unique([user1Id, user2Id])
+}
+
+model Message {
+  id             String       @id @default(uuid())
+  conversationId String
+  senderId       String
+  content        String
+  isRead         Boolean      @default(false)
+  createdAt      DateTime     @default(now())
+
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender         User         @relation(fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
+  @@index([senderId])
 }

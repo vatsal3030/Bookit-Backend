@@ -17,6 +17,7 @@ import providerRoutes from './routes/providerRoutes';
 import reviewRoutes from './routes/reviewRoutes';
 import notificationRoutes from './routes/notificationRoutes';
 import adminRoutes from './routes/adminRoutes';
+import messageRoutes from './routes/messageRoutes';
 
 dotenv.config();
 
@@ -39,11 +40,11 @@ app.get('/api/health', (_req: Request, res: Response) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/appointments', appointmentRoutes);
 app.use('/api/payments', paymentRoutes);
-app.use('/api/search', searchRoutes);
 app.use('/api/providers', providerRoutes);
 app.use('/api/reviews', reviewRoutes);
-app.use('/api/notifications', notificationRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/notifications', notificationRoutes);
+app.use('/api/messages', messageRoutes);
 
 // ─── 404 HANDLER ─────────────────────────────────────────
 app.use((_req: Request, res: Response) => {
