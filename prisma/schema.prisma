@@ -1,0 +1,224 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── ENUMS ───────────────────────────────────────────────
+
+enum Role {
+  CUSTOMER
+  PROVIDER
+  ADMIN
+}
+
+enum ApptStatus {
+  PENDING
+  CONFIRMED
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+}
+
+enum PayStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  REFUNDED
+}
+
+enum PayMethod {
+  CARD
+  UPI
+  WALLET
+  PAYLATER
+}
+
+enum NotificationType {
+  BOOKING
+  PAYMENT
+  REMINDER
+  SYSTEM
+  REVIEW
+}
+
+// ─── USER ────────────────────────────────────────────────
+
+model User {
+  id              String           @id @default(uuid())
+  name            String
+  email           String           @unique
+  password        String?          // nullable for Google OAuth users
+  googleId        String?          @unique
+  avatar          String?
+  role            Role             @default(CUSTOMER)
+  contactNo       String?
+  location        String?
+  isVerified      Boolean          @default(false)
+  refreshToken    String?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  
+  appointments    Appointment[]    @relation("CustomerAppointments")
+  reviews         Review[]
+  providerProfile ServiceProvider?
+  notifications   Notification[]
+
+  @@index([email])
+  @@index([role])
+}
+
+// ─── SERVICE PROVIDER ────────────────────────────────────
+
+model ServiceProvider {
+  id           String        @id @default(uuid())
+  userId       String        @unique
+  businessName String?
+  description  String?
+  category     String?
+  experience   String?
+  address      String?
+  lat          Float?
+  lng          Float?
+  coverImage   String?
+  workingHours String?       // JSON string: {"mon":"09:00-17:00",...}
+  isVerified   Boolean       @default(false)
+  rating       Float         @default(0)
+  reviewCount  Int           @default(0)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  appointments Appointment[] @relation("ProviderAppointments")
+  services     Service[]
+  timeSlots    TimeSlot[]
+  reviews      Review[]      @relation("ProviderReviews")
+
+  @@index([category])
+  @@index([rating])
+}
+
+// ─── SERVICE ─────────────────────────────────────────────
+
+model Service {
+  id           String          @id @default(uuid())
+  providerId   String
+  name         String
+  description  String?
+  category     String
+  duration     Int             @default(30) // minutes
+  baseFee      Float
+  tax          Float           @default(0)
+  isActive     Boolean         @default(true)
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  provider     ServiceProvider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  appointments Appointment[]
+
+  @@index([providerId])
+  @@index([category])
+}
+
+// ─── TIME SLOT ───────────────────────────────────────────
+
+model TimeSlot {
+  id           String          @id @default(uuid())
+  providerId   String
+  date         DateTime
+  startTime    DateTime
+  endTime      DateTime
+  isAvailable  Boolean         @default(true)
+  createdAt    DateTime        @default(now())
+
+  provider     ServiceProvider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  appointments Appointment[]
+
+  @@index([providerId, date])
+  @@index([startTime])
+}
+
+// ─── APPOINTMENT ─────────────────────────────────────────
+
+model Appointment {
+  id                 String          @id @default(uuid())
+  customerId         String
+  providerId         String
+  serviceId          String
+  timeSlotId         String
+  status             ApptStatus      @default(PENDING)
+  notes              String?
+  amount             Float
+  priority           String?         @default("NORMAL")
+  confirmationNo     String?         @unique
+  cancellationReason String?
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+  
+  customer           User            @relation("CustomerAppointments", fields: [customerId], references: [id])
+  provider           ServiceProvider @relation("ProviderAppointments", fields: [providerId], references: [id])
+  service            Service         @relation(fields: [serviceId], references: [id])
+  timeSlot           TimeSlot        @relation(fields: [timeSlotId], references: [id])
+  payment            Payment?
+  review             Review?
+
+  @@index([customerId])
+  @@index([providerId])
+  @@index([status])
+}
+
+// ─── PAYMENT ─────────────────────────────────────────────
+
+model Payment {
+  id            String      @id @default(uuid())
+  appointmentId String      @unique
+  amount        Float
+  method        PayMethod
+  status        PayStatus   @default(PENDING)
+  transactionNo String?
+  invoiceNo     String?     @unique
+  paidAt        DateTime?
+  createdAt     DateTime    @default(now())
+  
+  appointment   Appointment @relation(fields: [appointmentId], references: [id])
+
+  @@index([status])
+}
+
+// ─── REVIEW ──────────────────────────────────────────────
+
+model Review {
+  id            String          @id @default(uuid())
+  customerId    String
+  providerId    String
+  appointmentId String          @unique
+  rating        Int             // 1-5
+  comment       String?
+  createdAt     DateTime        @default(now())
+  
+  customer      User            @relation(fields: [customerId], references: [id])
+  provider      ServiceProvider @relation("ProviderReviews", fields: [providerId], references: [id])
+  appointment   Appointment     @relation(fields: [appointmentId], references: [id])
+
+  @@index([providerId])
+}
+
+// ─── NOTIFICATION ────────────────────────────────────────
+
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String
+  title     String
+  message   String
+  type      NotificationType @default(SYSTEM)
+  isRead    Boolean          @default(false)
+  link      String?          // optional deep link
+  createdAt DateTime         @default(now())
+
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead])
+}
