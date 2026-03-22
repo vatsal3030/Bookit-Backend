@@ -28,7 +28,10 @@ const port = process.env.PORT || 5000;
 app.use(helmet());
 app.use(cors({ origin: process.env.FRONTEND_URL || '*', credentials: true }));
 app.use(express.json({ limit: '10mb' }));
-app.use(morgan('dev'));
+// Only log HTTP requests in development — prevents Render log overflow
+if (process.env.NODE_ENV !== 'production') {
+  app.use(morgan('dev'));
+}
 app.use('/api', apiLimiter);
 
 // ─── HEALTH CHECK ────────────────────────────────────────
@@ -57,8 +60,7 @@ app.use(globalErrorHandler);
 
 // ─── START SERVER ────────────────────────────────────────
 app.listen(port, () => {
-  console.log(`🚀 Server running on http://localhost:${port}`);
-  console.log(`📋 Health: http://localhost:${port}/api/health`);
+  console.log(`🚀 Server running on port ${port} [${process.env.NODE_ENV || 'development'}]`);
 });
 
 export default app;
