@@ -1,4 +1,4 @@
-import express, { Request, Response } from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import helmet from 'helmet';
@@ -49,7 +49,7 @@ const BLOCKED_PATHS = new Set([
   '/storage/logs/laravel.log', '/storage/logs/stripe.log', '/storage/logs/payments.log',
 ]);
 
-app.use((req: Request, res: Response, next) => {
+app.use((req: Request, res: Response, next: NextFunction) => {
   const path = req.path.toLowerCase();
 
   // Block known scanner paths
