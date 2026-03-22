@@ -264,7 +264,8 @@ model PromoCode {
   id              String          @id @default(uuid())
   providerId      String
   code            String
-  discountPercent Float           // e.g., 10 for 10%
+  discountType    String          @default("PERCENTAGE") // PERCENTAGE or FLAT
+  discountValue   Float           // e.g., 10 for 10% or 100 for ₹100
   maxUses         Int?            // null = unlimited
   currentUses     Int             @default(0)
   validUntil      DateTime?

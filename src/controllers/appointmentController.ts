@@ -112,7 +112,14 @@ export const bookAppointment = asyncHandler(async (req: AuthRequest, res: Respon
   }
 
   const appointment = await prisma.$transaction(async (tx) => {
-    await tx.timeSlot.update({ where: { id: timeSlotId }, data: { isAvailable: false } });
+    const slotUpdate = await tx.timeSlot.updateMany({ 
+      where: { id: timeSlotId, isAvailable: true }, 
+      data: { isAvailable: false } 
+    });
+
+    if (slotUpdate.count === 0) {
+      throw new AppError('Sorry, this time slot was just booked by someone else.', 409);
+    }
 
     if (activePromo) {
       await tx.promoCode.update({
@@ -464,3 +471,45 @@ export const cancelAppointment = asyncHandler(async (req: AuthRequest, res: Resp
   res.json({ success: true, message: 'Appointment cancelled', refundAmount });
 });
 
+// ─── COMPLETE APPOINTMENT (Provider Only) ───────────────────
+
+export const completeAppointment = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const id = req.params.id as string;
+
+  if (req.user.role !== 'PROVIDER') {
+    throw new AppError('Only providers can complete standalone appointments internally', 403);
+  }
+
+  const appointment = await prisma.appointment.findUnique({
+    where: { id },
+    include: { provider: true, service: true, customer: true }
+  });
+
+  if (!appointment) throw new AppError('Appointment not found', 404);
+
+  if ((appointment as any).provider.userId !== req.user.id) {
+    throw new AppError('Not authorized', 403);
+  }
+
+  if (['CANCELLED', 'COMPLETED'].includes(appointment.status)) {
+    throw new AppError(`Cannot complete a ${appointment.status.toLowerCase()} appointment`, 400);
+  }
+
+  const updated = await prisma.appointment.update({
+    where: { id },
+    data: { status: 'COMPLETED' },
+  });
+
+  // Notify customer
+  await prisma.notification.create({
+    data: {
+      userId: appointment.customerId,
+      title: 'Appointment Completed',
+      message: `Your appointment for ${(appointment as any).service.name} has been marked as completed! Please leave a review.`,
+      type: 'BOOKING',
+      link: '/dashboard',
+    },
+  });
+
+  res.json({ success: true, appointment: updated });
+});

@@ -32,12 +32,16 @@ export const processPayment = asyncHandler(async (req: AuthRequest, res: Respons
     throw new AppError('Payment failed. Gateway rejected the transaction.', 402);
   }
 
+  // Add 2% platform fee at checkout
+  const platformFee = Math.ceil(appt.amount * 0.02);
+  const finalAmount = appt.amount + platformFee;
+
   const paymentStatus = method === 'PAYLATER' ? 'PENDING' : 'SUCCESS';
 
   const payment = await prisma.payment.create({
     data: {
       appointmentId,
-      amount: appt.amount,
+      amount: finalAmount,
       method: method as any,
       status: paymentStatus as any,
       transactionNo: `TXN-${Date.now()}-${Math.floor(Math.random() * 100000)}`,
@@ -60,8 +64,8 @@ export const processPayment = asyncHandler(async (req: AuthRequest, res: Respons
       userId: req.user.id,
       title: paymentStatus === 'SUCCESS' ? 'Payment Successful! ✅' : 'Payment Pending',
       message: paymentStatus === 'SUCCESS'
-        ? `₹${appt.amount} paid for ${appt.service.name}. Invoice: ${payment.invoiceNo}`
-        : `Your payment of ₹${appt.amount} is pending.`,
+        ? `₹${finalAmount} paid for ${appt.service.name} (incl. 2% fee). Invoice: ${payment.invoiceNo}`
+        : `Your payment of ₹${finalAmount} is pending.`,
       type: 'PAYMENT',
       link: `/dashboard`,
     },
@@ -73,7 +77,7 @@ export const processPayment = asyncHandler(async (req: AuthRequest, res: Respons
       data: {
         userId: appt.provider.userId,
         title: 'Payment Received! 💰',
-        message: `₹${appt.amount} received for ${appt.service.name}.`,
+        message: `₹${finalAmount} received for ${appt.service.name}.`,
         type: 'PAYMENT',
         link: '/dashboard',
       },

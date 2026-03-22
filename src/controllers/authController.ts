@@ -151,3 +151,23 @@ export const updateProfile = asyncHandler(async (req: AuthRequest, res: Response
 
   res.json({ success: true, user });
 });
+
+// ─── SWITCH ROLE ─────────────────────────────────────────
+
+export const switchRole = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const currentRole = req.user.role;
+  const newRole = currentRole === 'CUSTOMER' ? 'PROVIDER' : 'CUSTOMER';
+
+  const user = await prisma.user.update({
+    where: { id: req.user.id },
+    data: { role: newRole }
+  });
+
+  const token = signToken({ id: user.id, role: user.role });
+
+  res.json({
+    success: true,
+    token,
+    user: { id: user.id, name: user.name, email: user.email, role: user.role, avatar: user.avatar }
+  });
+});

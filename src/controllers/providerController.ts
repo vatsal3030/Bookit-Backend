@@ -35,10 +35,14 @@ const addOnSchema = z.object({
 
 const promoCodeSchema = z.object({
   code: z.string().min(3).toUpperCase(),
-  discountPercent: z.number().min(1).max(100),
+  discountType: z.enum(['PERCENTAGE', 'FLAT']).default('PERCENTAGE'),
+  discountValue: z.number().min(1),
   maxUses: z.number().int().min(1).optional(),
   validUntil: z.string().optional(),
-});
+}).refine(data => {
+  if (data.discountType === 'PERCENTAGE' && data.discountValue > 100) return false;
+  return true;
+}, { message: "Percentage discount cannot exceed 100", path: ['discountValue'] });
 
 const timeSlotSchema = z.object({
   date: z.string(),
@@ -94,16 +98,31 @@ export const updateProviderProfile = asyncHandler(async (req: AuthRequest, res: 
   const data = updateProviderSchema.parse(req.body);
 
   const existing = await prisma.serviceProvider.findUnique({ where: { userId: req.user.id } });
-  if (!existing) throw new AppError('Provider profile not found', 404);
-
-  const updated = await prisma.serviceProvider.update({
-    where: { userId: req.user.id },
-    data,
-    include: {
-      user: { select: { name: true, email: true, avatar: true } },
-      services: true,
-    },
-  });
+  
+  let updated;
+  if (!existing) {
+    updated = await prisma.serviceProvider.create({
+      data: {
+        userId: req.user.id,
+        businessName: data.businessName || '',
+        category: data.category || 'Other',
+        description: data.description,
+        address: data.address,
+        lat: data.lat,
+        lng: data.lng,
+      },
+      include: { user: { select: { name: true, email: true, avatar: true } }, services: true }
+    });
+  } else {
+    updated = await prisma.serviceProvider.update({
+      where: { userId: req.user.id },
+      data,
+      include: {
+        user: { select: { name: true, email: true, avatar: true } },
+        services: true,
+      },
+    });
+  }
 
   res.json({ success: true, provider: updated });
 });
@@ -211,8 +230,26 @@ export const deleteServiceAddOn = asyncHandler(async (req: AuthRequest, res: Res
 export const createPromoCode = asyncHandler(async (req: AuthRequest, res: Response) => {
   const data = promoCodeSchema.parse(req.body);
 
-  const provider = await prisma.serviceProvider.findUnique({ where: { userId: req.user.id } });
+  const provider = await prisma.serviceProvider.findUnique({ 
+    where: { userId: req.user.id },
+    include: { services: true }
+  });
   if (!provider) throw new AppError('Provider profile not found', 404);
+
+  // Validate limits based on type to prevent logical financial errors
+  if (data.discountType === 'PERCENTAGE' && (data.discountValue <= 0 || data.discountValue > 100)) {
+    throw new AppError('Percentage discount must be between 1 and 100', 400);
+  }
+
+  if (data.discountType === 'FLAT' && provider.services.length > 0) {
+    const activeServices = provider.services.filter(s => s.isActive);
+    if (activeServices.length > 0) {
+      const minPrice = Math.min(...activeServices.map(s => s.baseFee));
+      if (data.discountValue >= minPrice) {
+        throw new AppError(`Flat discount (₹${data.discountValue}) cannot be greater than or equal to your cheapest service (₹${minPrice})`, 400);
+      }
+    }
+  }
 
   const existing = await prisma.promoCode.findFirst({
     where: { providerId: provider.id, code: data.code }

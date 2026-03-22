@@ -47,3 +47,13 @@ export const markAllAsRead = asyncHandler(async (req: AuthRequest, res: Response
 
   res.json({ success: true, message: 'All notifications marked as read' });
 });
+
+// ─── CLEAR ALL ───────────────────────────────────────────
+
+export const clearAll = asyncHandler(async (req: AuthRequest, res: Response) => {
+  await prisma.notification.deleteMany({
+    where: { userId: req.user.id },
+  });
+
+  res.json({ success: true, message: 'All notifications deleted' });
+});
