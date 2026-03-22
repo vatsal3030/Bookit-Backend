@@ -19,6 +19,7 @@ import reviewRoutes from './routes/reviewRoutes';
 import notificationRoutes from './routes/notificationRoutes';
 import adminRoutes from './routes/adminRoutes';
 import messageRoutes from './routes/messageRoutes';
+import sitemapRoutes from './routes/sitemapRoutes';
 
 dotenv.config();
 
@@ -132,6 +133,9 @@ app.use('/api/reviews', reviewRoutes);
 app.use('/api/admin', sensitiveLimiter, adminRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/messages', messageRoutes);
+
+// ─── PUBLIC SEO ENDPOINTS ────────────────────────────────
+app.use('/api', sitemapRoutes);
 
 // ─── 404 HANDLER ─────────────────────────────────────────
 app.use((_req: Request, res: Response) => {
