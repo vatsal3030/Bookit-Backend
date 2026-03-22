@@ -66,11 +66,12 @@ export const verifyProvider = asyncHandler(async (req: AuthRequest, res: Respons
 // ─── ADMIN DASHBOARD STATS ──────────────────────────────
 
 export const getDashboardStats = asyncHandler(async (req: AuthRequest, res: Response) => {
-  const [totalUsers, totalProviders, totalAppointments, totalRevenue, recentAppointments] = await Promise.all([
+  const [totalUsers, totalProviders, totalAppointments, onlineRevenue, offlineRevenue, recentAppointments] = await Promise.all([
     prisma.user.count(),
     prisma.serviceProvider.count(),
     prisma.appointment.count(),
     prisma.payment.aggregate({ where: { status: 'SUCCESS' }, _sum: { amount: true } }),
+    prisma.appointment.aggregate({ where: { status: 'COMPLETED', payment: { is: null } }, _sum: { totalAmount: true } }),
     prisma.appointment.findMany({
       include: {
         customer: { select: { name: true } },
@@ -88,7 +89,7 @@ export const getDashboardStats = asyncHandler(async (req: AuthRequest, res: Resp
       totalUsers,
       totalProviders,
       totalAppointments,
-      totalRevenue: totalRevenue._sum.amount || 0,
+      totalRevenue: (onlineRevenue._sum.amount || 0) + (offlineRevenue._sum.totalAmount || 0),
     },
     recentAppointments,
   });

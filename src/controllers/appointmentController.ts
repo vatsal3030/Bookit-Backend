@@ -193,12 +193,15 @@ export const updateStatus = asyncHandler(async (req: AuthRequest, res: Response)
 
   const appt = await prisma.appointment.findUnique({
     where: { id },
-    include: { provider: true, service: true },
+    include: { provider: true, service: true, timeSlot: true },
   });
   if (!appt) throw new AppError('Appointment not found', 404);
 
   // Release slot if cancelled
   if (status === 'CANCELLED') {
+    if (appt.timeSlot && new Date(appt.timeSlot.startTime).getTime() < Date.now()) {
+      throw new AppError('Cannot cancel past appointments', 400);
+    }
     await prisma.timeSlot.update({ where: { id: appt.timeSlotId }, data: { isAvailable: true } });
   }
 
@@ -266,7 +269,7 @@ export const getCustomerAnalytics = asyncHandler(async (req: AuthRequest, res: R
   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
   // Overall stats
-  const [totalAppointments, spendAggr, completedCount, cancelledCount] = await Promise.all([
+  const [totalAppointments, onlineSpend, offlineSpend, completedCount, cancelledCount] = await Promise.all([
     prisma.appointment.count({ where: { customerId } }),
     prisma.payment.aggregate({
       _sum: { amount: true },
@@ -274,6 +277,10 @@ export const getCustomerAnalytics = asyncHandler(async (req: AuthRequest, res: R
         appointment: { customerId },
         status: 'SUCCESS',
       },
+    }),
+    prisma.appointment.aggregate({
+      where: { customerId, status: 'COMPLETED', payment: { is: null } },
+      _sum: { totalAmount: true },
     }),
     prisma.appointment.count({ where: { customerId, status: 'COMPLETED' } }),
     prisma.appointment.count({ where: { customerId, status: 'CANCELLED' } }),
@@ -298,7 +305,7 @@ export const getCustomerAnalytics = asyncHandler(async (req: AuthRequest, res: R
   // Daily bookings over last 30 days
   const recentAppointments = await prisma.appointment.findMany({
     where: { customerId, createdAt: { gte: thirtyDaysAgo } },
-    select: { createdAt: true, amount: true },
+    select: { createdAt: true, amount: true, totalAmount: true, status: true, payment: { select: { status: true } } },
   });
 
   const dailyMap: Record<string, { date: string; bookings: number; spent: number }> = {};
@@ -313,7 +320,9 @@ export const getCustomerAnalytics = asyncHandler(async (req: AuthRequest, res: R
     const key = a.createdAt.toISOString().split('T')[0];
     if (dailyMap[key]) {
       dailyMap[key].bookings += 1;
-      dailyMap[key].spent += a.amount;
+      if (a.payment?.status === 'SUCCESS' || a.status === 'COMPLETED') {
+        dailyMap[key].spent += (a.totalAmount || a.amount);
+      }
     }
   });
 
@@ -321,7 +330,7 @@ export const getCustomerAnalytics = asyncHandler(async (req: AuthRequest, res: R
     success: true,
     analytics: {
       totalAppointments,
-      totalSpent: spendAggr._sum.amount || 0,
+      totalSpent: (onlineSpend._sum.amount || 0) + (offlineSpend._sum.totalAmount || 0),
       completedCount,
       cancelledCount,
       categories,
@@ -343,6 +352,10 @@ export const rescheduleAppointment = asyncHandler(async (req: AuthRequest, res: 
     include: { provider: true, service: true, timeSlot: true },
   });
   if (!appt) throw new AppError('Appointment not found', 404);
+
+  if (appt.timeSlot && new Date(appt.timeSlot.startTime).getTime() < Date.now()) {
+    throw new AppError('Cannot reschedule past appointments', 400);
+  }
 
   // Only the customer or the provider can reschedule
   if (appt.customerId !== req.user.id && appt.provider.userId !== req.user.id) {

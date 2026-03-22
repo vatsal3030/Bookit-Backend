@@ -51,17 +51,26 @@ const timeSlotSchema = z.object({
   title: z.string().optional(),
   description: z.string().optional(),
   serviceId: z.string().optional(),
+  staffId: z.string().optional(),
 });
 
 const bulkSlotSchema = z.object({
   date: z.string(),
   serviceId: z.string().optional(),
+  staffId: z.string().optional(),
   slots: z.array(z.object({
     startTime: z.string(),
     endTime: z.string(),
     title: z.string().optional(),
     description: z.string().optional(),
   })),
+});
+
+const staffSchema = z.object({
+  name: z.string().min(2),
+  role: z.string().optional(),
+  email: z.string().email().optional().or(z.literal('')),
+  phone: z.string().optional(),
 });
 
 // ─── GET PROVIDER PROFILE ────────────────────────────────
@@ -84,6 +93,7 @@ export const getProviderProfile = asyncHandler(async (req: any, res: Response) =
         take: 5,
       },
       promoCodes: { where: { isActive: true } },
+      teamMembers: { where: { isActive: true } },
       _count: { select: { appointments: true, reviews: true } },
     },
   });
@@ -283,6 +293,47 @@ export const deletePromoCode = asyncHandler(async (req: AuthRequest, res: Respon
   res.json({ success: true, message: 'Promo code deactivated' });
 });
 
+// ─── ADD STAFF / TEAM MEMBER ─────────────────────────────
+
+export const addStaff = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const data = staffSchema.parse(req.body);
+  const provider = await prisma.serviceProvider.findUnique({ where: { userId: req.user.id } });
+  if (!provider) throw new AppError('Provider profile not found', 404);
+
+  const staff = await prisma.teamMember.create({
+    data: { ...data, providerId: provider.id },
+  });
+  res.status(201).json({ success: true, staff });
+});
+
+// ─── UPDATE STAFF / TEAM MEMBER ──────────────────────────
+
+export const updateStaff = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const data = staffSchema.partial().parse(req.body);
+  const id = req.params.id as string;
+  const staff = await prisma.teamMember.findUnique({ where: { id } });
+  const provider = await prisma.serviceProvider.findUnique({ where: { userId: req.user.id } });
+  
+  if (!staff || !provider || staff.providerId !== provider.id) throw new AppError('Staff not found or unauthorized', 404);
+  
+  const updated = await prisma.teamMember.update({ where: { id }, data });
+  res.json({ success: true, staff: updated });
+});
+
+// ─── DELETE STAFF / TEAM MEMBER ──────────────────────────
+
+export const deleteStaff = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const id = req.params.id as string;
+  const staff = await prisma.teamMember.findUnique({ where: { id } });
+  const provider = await prisma.serviceProvider.findUnique({ where: { userId: req.user.id } });
+
+  if (!staff || !provider || staff.providerId !== provider.id) throw new AppError('Unauthorized', 403);
+
+  // Soft delete Staff
+  await prisma.teamMember.update({ where: { id }, data: { isActive: false } });
+  res.json({ success: true, message: 'Staff deactivated' });
+});
+
 // ─── ADD TIME SLOT ───────────────────────────────────────
 
 export const addTimeSlot = asyncHandler(async (req: AuthRequest, res: Response) => {
@@ -300,8 +351,12 @@ export const addTimeSlot = asyncHandler(async (req: AuthRequest, res: Response) 
       title: data.title || null,
       description: data.description || null,
       serviceId: data.serviceId || null,
+      staffId: data.staffId || null,
     },
-    include: { service: { select: { id: true, name: true, category: true } } },
+    include: { 
+      service: { select: { id: true, name: true, category: true } },
+      staff: { select: { id: true, name: true, role: true } }
+    },
   });
 
   res.status(201).json({ success: true, slot });
@@ -324,6 +379,7 @@ export const addBulkTimeSlots = asyncHandler(async (req: AuthRequest, res: Respo
       title: s.title || null,
       description: s.description || null,
       serviceId: data.serviceId || null,
+      staffId: data.staffId || null,
     })),
   });
 
@@ -381,13 +437,17 @@ export const getDashboardStats = asyncHandler(async (req: AuthRequest, res: Resp
   const provider = await prisma.serviceProvider.findUnique({ where: { userId: req.user.id } });
   if (!provider) throw new AppError('Provider profile not found', 404);
 
-  const [totalAppointments, upcomingAppointments, completedAppointments, totalRevenue, recentAppointments] = await Promise.all([
+  const [totalAppointments, upcomingAppointments, completedAppointments, onlineRevenue, offlineRevenue, recentAppointments] = await Promise.all([
     prisma.appointment.count({ where: { providerId: provider.id } }),
     prisma.appointment.count({ where: { providerId: provider.id, status: 'CONFIRMED' } }),
     prisma.appointment.count({ where: { providerId: provider.id, status: 'COMPLETED' } }),
     prisma.payment.aggregate({
       where: { appointment: { providerId: provider.id }, status: 'SUCCESS' },
       _sum: { amount: true },
+    }),
+    prisma.appointment.aggregate({
+      where: { providerId: provider.id, status: 'COMPLETED', payment: { is: null } },
+      _sum: { totalAmount: true },
     }),
     prisma.appointment.findMany({
       where: { providerId: provider.id },
@@ -407,7 +467,7 @@ export const getDashboardStats = asyncHandler(async (req: AuthRequest, res: Resp
       totalAppointments,
       upcomingAppointments,
       completedAppointments,
-      totalRevenue: totalRevenue._sum.amount || 0,
+      totalRevenue: (onlineRevenue._sum.amount || 0) + (offlineRevenue._sum.totalAmount || 0),
       rating: provider.rating,
       reviewCount: provider.reviewCount,
     },

@@ -135,8 +135,24 @@ export const getMessages = asyncHandler(async (req: AuthRequest, res: Response) 
   });
 
   if (!conversation) throw new AppError('Conversation not found', 404);
-  if (conversation.user1Id !== req.user.id && conversation.user2Id !== req.user.id) {
-    throw new AppError('Unauthorized', 403);
+  const otherUserId = conversation.user1Id === req.user.id ? conversation.user2Id : conversation.user1Id;
+  if (!otherUserId) throw new AppError('Unauthorized', 403);
+
+  // Check if they are allowed to message
+  let canReply = true;
+  if (req.user.role !== 'ADMIN') {
+    const actvAppt = await prisma.appointment.findFirst({
+      where: {
+        OR: [
+          { customerId: req.user.id, provider: { userId: otherUserId } },
+          { customerId: otherUserId, provider: { userId: req.user.id } }
+        ],
+        status: { in: ['PENDING', 'CONFIRMED'] },
+        timeSlot: { endTime: { gt: new Date() } }
+      }
+    });
+    const opUser = await prisma.user.findUnique({ where: { id: otherUserId } });
+    if (!actvAppt && opUser?.role !== 'ADMIN') canReply = false;
   }
 
   // Mark all unread messages as read (page 1 only usually makes sense, but we'll do it for all requests)
@@ -162,7 +178,7 @@ export const getMessages = asyncHandler(async (req: AuthRequest, res: Response) 
   ]);
 
   // Return in chronological order (oldest first for UI rendering)
-  res.json({ success: true, messages: messages.reverse(), pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } });
+  res.json({ success: true, messages: messages.reverse(), canReply, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } });
 });
 
 // ─── SEND MESSAGE ────────────────────────────────────────
@@ -176,8 +192,24 @@ export const sendMessage = asyncHandler(async (req: AuthRequest, res: Response) 
   });
 
   if (!conversation) throw new AppError('Conversation not found', 404);
-  if (conversation.user1Id !== req.user.id && conversation.user2Id !== req.user.id) {
-    throw new AppError('Unauthorized', 403);
+  const otherUserId = conversation.user1Id === req.user.id ? conversation.user2Id : conversation.user1Id;
+  if (!otherUserId) throw new AppError('Unauthorized', 403);
+
+  if (req.user.role !== 'ADMIN') {
+    const actvAppt = await prisma.appointment.findFirst({
+      where: {
+        OR: [
+          { customerId: req.user.id, provider: { userId: otherUserId } },
+          { customerId: otherUserId, provider: { userId: req.user.id } }
+        ],
+        status: { in: ['PENDING', 'CONFIRMED'] },
+        timeSlot: { endTime: { gt: new Date() } }
+      }
+    });
+    const opUser = await prisma.user.findUnique({ where: { id: otherUserId } });
+    if (!actvAppt && opUser?.role !== 'ADMIN') {
+      throw new AppError('Cannot send messages without an active future appointment.', 403);
+    }
   }
 
   const message = await prisma.message.create({

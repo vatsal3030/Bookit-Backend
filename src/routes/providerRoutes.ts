@@ -5,6 +5,7 @@ import {
   addTimeSlot, addBulkTimeSlots, getTimeSlots, deleteTimeSlot,
   getDashboardStats, getProviderAnalytics,
   createPromoCode, deletePromoCode,
+  addStaff, updateStaff, deleteStaff
 } from '../controllers/providerController';
 import { authMiddleware, requireRole } from '../middlewares/authMiddleware';
 
@@ -32,6 +33,11 @@ router.delete('/addons/:id', authMiddleware, requireRole('PROVIDER'), deleteServ
 // Promo Codes
 router.post('/promocodes', authMiddleware, requireRole('PROVIDER'), createPromoCode);
 router.delete('/promocodes/:id', authMiddleware, requireRole('PROVIDER'), deletePromoCode);
+
+// Staff / Team Members
+router.post('/staff', authMiddleware, requireRole('ORGANIZATION'), addStaff);
+router.put('/staff/:id', authMiddleware, requireRole('ORGANIZATION'), updateStaff);
+router.delete('/staff/:id', authMiddleware, requireRole('ORGANIZATION'), deleteStaff);
 
 // Time slots
 router.post('/slots', authMiddleware, requireRole('PROVIDER'), addTimeSlot);

@@ -24,7 +24,31 @@ export const authMiddleware = (req: AuthRequest, res: Response, next: NextFuncti
 
 export const requireRole = (role: string) => {
   return (req: AuthRequest, res: Response, next: NextFunction) => {
-    if (!req.user || req.user.role !== role) {
+    if (!req.user) {
+      return res.status(403).json({ error: 'Forbidden: Insufficient privileges' });
+    }
+
+    const { role: userRole } = req.user;
+    let hasAccess = false;
+
+    // Role Hierarchy Logic
+    if (userRole === 'ADMIN') {
+      hasAccess = true;
+    } else if (role === 'CUSTOMER') {
+      // CUSTOMER routes are accessible by any authenticated user (PROVIDER/ORGANIZATION/etc)
+      hasAccess = true;
+    } else if (role === 'PROVIDER' && (userRole === 'PROVIDER' || userRole === 'ORGANIZATION')) {
+      // PROVIDER routes are accessible by PROVIDERS and up (ORGANIZATIONS)
+      hasAccess = true;
+    } else if (role === 'ORGANIZATION' && userRole === 'ORGANIZATION') {
+      // ORGANIZATION routes are strict
+      hasAccess = true;
+    } else if (userRole === role) {
+      // Exact match fallback
+      hasAccess = true;
+    }
+
+    if (!hasAccess) {
       return res.status(403).json({ error: 'Forbidden: Insufficient privileges' });
     }
     next();

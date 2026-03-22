@@ -14,6 +14,7 @@ enum Role {
   CUSTOMER
   PROVIDER
   ADMIN
+  ORGANIZATION
 }
 
 enum ApptStatus {
@@ -99,6 +100,7 @@ model ServiceProvider {
   user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   appointments Appointment[] @relation("ProviderAppointments")
   services     Service[]
+  teamMembers  TeamMember[]
   timeSlots    TimeSlot[]
   reviews      Review[]      @relation("ProviderReviews")
   promoCodes   PromoCode[]
@@ -154,6 +156,7 @@ model TimeSlot {
   id           String          @id @default(uuid())
   providerId   String
   serviceId    String?         // optional link to specific service
+  staffId      String?         // optional link to a specific team member
   title        String?         // e.g. "Morning Consultation"
   description  String?         // additional details about this slot
   date         DateTime
@@ -164,10 +167,31 @@ model TimeSlot {
 
   provider     ServiceProvider @relation(fields: [providerId], references: [id], onDelete: Cascade)
   service      Service?        @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+  staff        TeamMember?     @relation(fields: [staffId], references: [id], onDelete: SetNull)
   appointments Appointment[]
 
   @@index([providerId, date])
   @@index([startTime])
+  @@index([staffId])
+}
+
+// ─── TEAM MEMBER (STAFF) ─────────────────────────────────
+
+model TeamMember {
+  id           String          @id @default(uuid())
+  providerId   String
+  name         String
+  role         String?         // e.g. "Senior Stylist", "Cardiologist"
+  email        String?
+  phone        String?
+  isActive     Boolean         @default(true)
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  provider     ServiceProvider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  timeSlots    TimeSlot[]
+
+  @@index([providerId])
 }
 
 // ─── APPOINTMENT ─────────────────────────────────────────

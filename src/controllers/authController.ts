@@ -152,15 +152,33 @@ export const updateProfile = asyncHandler(async (req: AuthRequest, res: Response
   res.json({ success: true, user });
 });
 
-// ─── SWITCH ROLE ─────────────────────────────────────────
+// ─── SWITCH/UPGRADE ROLE ─────────────────────────────────
 
 export const switchRole = asyncHandler(async (req: AuthRequest, res: Response) => {
   const currentRole = req.user.role;
-  const newRole = currentRole === 'CUSTOMER' ? 'PROVIDER' : 'CUSTOMER';
+  let newRole: string;
+
+  if (currentRole === 'CUSTOMER') {
+    newRole = 'PROVIDER';
+    // Ensure a provider profile exists
+    const existing = await prisma.serviceProvider.findUnique({ where: { userId: req.user.id }});
+    if (!existing) {
+      const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+      await prisma.serviceProvider.create({
+        data: { userId: req.user.id, businessName: user?.name || 'My Business' },
+      });
+    }
+  } else if (currentRole === 'PROVIDER') {
+    newRole = 'ORGANIZATION';
+  } else if (currentRole === 'ORGANIZATION') {
+    newRole = 'CUSTOMER'; // Optional: allowing reset to customer for testing
+  } else {
+    throw new AppError('Cannot downgrade/upgrade this role natively', 400);
+  }
 
   const user = await prisma.user.update({
     where: { id: req.user.id },
-    data: { role: newRole }
+    data: { role: newRole as any }
   });
 
   const token = signToken({ id: user.id, role: user.role });
