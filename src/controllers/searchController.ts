@@ -5,7 +5,7 @@ import { asyncHandler } from '../utils/errorHandler';
 // ─── SEARCH PROVIDERS ────────────────────────────────────
 
 export const searchProviders = asyncHandler(async (req: Request, res: Response) => {
-  const { category, lat, lng, maxDistance, q } = req.query;
+  const { category, lat, lng, maxDistance, q, sortBy } = req.query;
   const page = parseInt(req.query.page as string) || 1;
   const limit = parseInt(req.query.limit as string) || 20;
 
@@ -103,13 +103,33 @@ export const searchProviders = asyncHandler(async (req: Request, res: Response) 
       processed = processed.filter((p: any) => p.distance === null || p.distance <= maxDist);
     }
 
-    // Sort by Score DESC -> Distance ASC -> Rating DESC
+    // Sort based on sortBy parameter, then fallback to score/distance/rating
+    const sortByStr = sortBy ? String(sortBy) : 'distance';
+
     processed.sort((a, b) => {
+      // If text search, always prioritize by relevance score first
       if (q && a.score !== b.score) return b.score - a.score;
-      if (userLat !== null && userLng !== null) {
-         if (a.distance !== b.distance) return (a.distance ?? 999) - (b.distance ?? 999);
+
+      switch (sortByStr) {
+        case 'rating':
+          return (b.rating ?? 0) - (a.rating ?? 0);
+        case 'price_low': {
+          const aMin = a.services?.length ? Math.min(...a.services.map((s: any) => s.baseFee || 0)) : Infinity;
+          const bMin = b.services?.length ? Math.min(...b.services.map((s: any) => s.baseFee || 0)) : Infinity;
+          return aMin - bMin;
+        }
+        case 'price_high': {
+          const aMax = a.services?.length ? Math.max(...a.services.map((s: any) => s.baseFee || 0)) : 0;
+          const bMax = b.services?.length ? Math.max(...b.services.map((s: any) => s.baseFee || 0)) : 0;
+          return bMax - aMax;
+        }
+        case 'distance':
+        default:
+          if (userLat !== null && userLng !== null) {
+            if (a.distance !== b.distance) return (a.distance ?? 999) - (b.distance ?? 999);
+          }
+          return (b.rating ?? 0) - (a.rating ?? 0);
       }
-      return (b.rating ?? 0) - (a.rating ?? 0);
     });
 
     const total = processed.length;

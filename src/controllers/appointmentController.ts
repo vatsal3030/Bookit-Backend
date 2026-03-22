@@ -101,7 +101,11 @@ export const bookAppointment = asyncHandler(async (req: AuthRequest, res: Respon
       const isWithinUses = !activePromo.maxUses || activePromo.currentUses < activePromo.maxUses;
 
       if (isValidDate && isWithinUses) {
-        appliedPromoDiscount = (totalAmount * activePromo.discountPercent) / 100;
+        if (activePromo.discountType === 'FLAT') {
+          appliedPromoDiscount = Math.min(activePromo.discountValue, totalAmount);
+        } else {
+          appliedPromoDiscount = (totalAmount * activePromo.discountValue) / 100;
+        }
         totalAmount -= appliedPromoDiscount;
       } else {
         throw new AppError('Promo code is expired or invalid', 400);
