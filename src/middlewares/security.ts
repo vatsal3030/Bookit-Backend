@@ -34,8 +34,8 @@ function sanitizeValue(value: any): any {
 
 export const xssSanitizer = (req: Request, _res: Response, next: NextFunction) => {
   if (req.body) req.body = sanitizeValue(req.body);
-  if (req.query) req.query = sanitizeValue(req.query);
-  if (req.params) req.params = sanitizeValue(req.params);
+  // Note: req.query is read-only in Express 5, and req.params is set by router.
+  // Only sanitize req.body which contains user-submitted data.
   next();
 };
 
