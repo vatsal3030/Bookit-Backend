@@ -24,9 +24,15 @@ export const getAppointments = asyncHandler(async (req: AuthRequest, res: Respon
   const limit = parseInt(req.query.limit as string) || 20;
   const skip = (page - 1) * limit;
 
-  const where: any = isCustomer
-    ? { customerId: req.user.id }
-    : { provider: { userId: req.user.id } };
+  let userMode = req.query.mode as string;
+  // Fallback if mode not specified
+  if (!userMode) {
+    userMode = req.user.role === 'CUSTOMER' ? 'customer' : 'provider';
+  }
+
+  const where: any = (userMode === 'provider' || userMode === 'incoming')
+    ? { provider: { userId: req.user.id } }
+    : { customerId: req.user.id };
 
   if (status && ['PENDING', 'CONFIRMED', 'COMPLETED', 'CANCELLED', 'RESCHEDULED', 'NO_SHOW'].includes(status)) {
     where.status = status;
@@ -58,7 +64,11 @@ export const getAppointments = asyncHandler(async (req: AuthRequest, res: Respon
 // ─── BOOK APPOINTMENT ────────────────────────────────────
 
 export const bookAppointment = asyncHandler(async (req: AuthRequest, res: Response) => {
-  const { providerId, serviceId, timeSlotId, addOnIds, promoCode, notes } = appointmentSchema.parse(req.body);
+  const parsed = appointmentSchema.safeParse(req.body);
+  if (!parsed.success) {
+    throw new AppError('Validation failed: ' + parsed.error.issues.map((e: any) => e.message).join(', '), 400);
+  }
+  const { providerId, serviceId, timeSlotId, addOnIds, promoCode, notes } = parsed.data;
 
   // Prevent self-booking
   const providerProfile = await prisma.serviceProvider.findUnique({ where: { id: providerId } });
@@ -132,20 +142,25 @@ export const bookAppointment = asyncHandler(async (req: AuthRequest, res: Respon
       });
     }
 
+    const appointmentData: any = {
+      customerId: req.user.id,
+      providerId,
+      serviceId,
+      timeSlotId,
+      amount,
+      totalAmount,
+      discountAmount: appliedPromoDiscount,
+      promoCode: activePromo ? activePromo.code : null,
+      notes: notes || null,
+      confirmationNo: `APT-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+    };
+
+    if (addOnsData.length > 0) {
+      appointmentData.addOns = addOnsData;
+    }
+
     const appt = await tx.appointment.create({
-      data: {
-        customerId: req.user.id,
-        providerId,
-        serviceId,
-        timeSlotId,
-        amount,
-        totalAmount,
-        discountAmount: appliedPromoDiscount,
-        promoCode: activePromo ? activePromo.code : null,
-        addOns: addOnsData.length > 0 ? addOnsData : undefined,
-        notes,
-        confirmationNo: `APT-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-      },
+      data: appointmentData,
       include: {
         service: true,
         timeSlot: true,
@@ -156,14 +171,13 @@ export const bookAppointment = asyncHandler(async (req: AuthRequest, res: Respon
     return appt;
   });
 
-  // Notify provider
   const provider = await prisma.serviceProvider.findUnique({ where: { id: providerId } });
   if (provider) {
     await prisma.notification.create({
       data: {
         userId: provider.userId,
         title: 'New Booking!',
-        message: `${req.user.name || 'A customer'} booked ${appointment.service.name}`,
+        message: `${req.user?.name || 'A customer'} booked ${appointment.service?.name || 'a service'}`,
         type: 'BOOKING',
         link: '/dashboard',
       },

@@ -3,91 +3,135 @@ import { z } from 'zod';
 import { prisma } from '../prisma';
 import { AuthRequest } from '../middlewares/authMiddleware';
 import { asyncHandler, AppError } from '../utils/errorHandler';
+import crypto from 'crypto';
+import Razorpay from 'razorpay';
+// ─── INIT RAZORPAY ───────────────────────────────────────
+
+const razorpay = new Razorpay({
+  key_id: process.env.RAZORPAY_KEY_ID || '',
+  key_secret: process.env.RAZORPAY_KEY_SECRET || '',
+});
 
 // ─── SCHEMAS ─────────────────────────────────────────────
 
-const paymentSchema = z.object({
+const createOrderSchema = z.object({
   appointmentId: z.string(),
-  method: z.enum(['CARD', 'UPI', 'WALLET', 'PAYLATER']),
 });
 
-// ─── PROCESS PAYMENT ─────────────────────────────────────
+const verifyPaymentSchema = z.object({
+  razorpay_payment_id: z.string(),
+  razorpay_order_id: z.string(),
+  razorpay_signature: z.string(),
+  appointmentId: z.string(),
+});
 
-export const processPayment = asyncHandler(async (req: AuthRequest, res: Response) => {
-  const { appointmentId, method } = paymentSchema.parse(req.body);
+// ─── CREATE RAZORPAY ORDER ───────────────────────────────
+
+export const createOrder = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { appointmentId } = createOrderSchema.parse(req.body);
 
   const appt = await prisma.appointment.findUnique({
     where: { id: appointmentId },
-    include: { payment: true, service: true, provider: { include: { user: { select: { name: true } } } } },
+    include: { payment: true, service: true },
   });
 
   if (!appt) throw new AppError('Appointment not found', 404);
   if (appt.customerId !== req.user.id) throw new AppError('Forbidden', 403);
   if (appt.payment) throw new AppError('Payment already processed', 400);
 
-  // Simulate payment gateway processing (90% success rate)
-  const isSuccess = Math.random() > 0.1;
+  const platformFee = Math.ceil(appt.totalAmount * 0.02);
+  const finalAmount = appt.totalAmount + platformFee;
 
-  if (!isSuccess && method !== 'PAYLATER') {
-    throw new AppError('Payment failed. Gateway rejected the transaction.', 402);
+  const options = {
+    amount: finalAmount * 100, // Razorpay expects amount in paise
+    currency: 'INR',
+    receipt: `INV-${Date.now()}`,
+  };
+
+  const order = await razorpay.orders.create(options);
+
+  res.json({
+    success: true,
+    orderId: order.id,
+    amount: finalAmount,
+    currency: order.currency,
+    keyId: process.env.RAZORPAY_KEY_ID,
+  });
+});
+
+// ─── VERIFY PAYMENT ──────────────────────────────────────
+
+export const verifyPayment = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { razorpay_payment_id, razorpay_order_id, razorpay_signature, appointmentId } = verifyPaymentSchema.parse(req.body);
+
+  const secret = process.env.RAZORPAY_KEY_SECRET || '';
+
+  const generatedSignature = crypto
+    .createHmac('sha256', secret)
+    .update(razorpay_order_id + '|' + razorpay_payment_id)
+    .digest('hex');
+
+  if (generatedSignature !== razorpay_signature) {
+    throw new AppError('Payment verification failed', 400);
   }
 
-  // Add 2% platform fee at checkout
-  const platformFee = Math.ceil(appt.amount * 0.02);
-  const finalAmount = appt.amount + platformFee;
+  const appt = await prisma.appointment.findUnique({
+    where: { id: appointmentId },
+    include: { service: true, provider: { include: { user: { select: { name: true } } } } },
+  });
 
-  const paymentStatus = method === 'PAYLATER' ? 'PENDING' : 'SUCCESS';
+  if (!appt) throw new AppError('Appointment not found', 404);
+
+  // Fetch payment details to know method
+  const rpPayment = await razorpay.payments.fetch(razorpay_payment_id);
+  let dbMethod = 'CARD';
+  if (rpPayment.method === 'upi') dbMethod = 'UPI';
+  else if (rpPayment.method === 'wallet') dbMethod = 'WALLET';
+
+  const platformFee = Math.ceil(appt.totalAmount * 0.02);
+  const finalAmount = appt.totalAmount + platformFee;
 
   const payment = await prisma.payment.create({
     data: {
       appointmentId,
       amount: finalAmount,
-      method: method as any,
-      status: paymentStatus as any,
-      transactionNo: `TXN-${Date.now()}-${Math.floor(Math.random() * 100000)}`,
+      method: dbMethod as any,
+      status: 'SUCCESS',
+      transactionNo: razorpay_payment_id,
       invoiceNo: `INV-${Date.now()}`,
-      ...(paymentStatus === 'SUCCESS' && { paidAt: new Date() }),
+      paidAt: new Date(),
     },
   });
 
-  // Update appointment status if payment succeeded
-  if (paymentStatus === 'SUCCESS') {
-    await prisma.appointment.update({
-      where: { id: appointmentId },
-      data: { status: 'CONFIRMED' },
-    });
-  }
+  await prisma.appointment.update({
+    where: { id: appointmentId },
+    data: { status: 'CONFIRMED' },
+  });
 
-  // Notify customer
   await prisma.notification.create({
     data: {
       userId: req.user.id,
-      title: paymentStatus === 'SUCCESS' ? 'Payment Successful! ✅' : 'Payment Pending',
-      message: paymentStatus === 'SUCCESS'
-        ? `₹${finalAmount} paid for ${appt.service.name} (incl. 2% fee). Invoice: ${payment.invoiceNo}`
-        : `Your payment of ₹${finalAmount} is pending.`,
+      title: 'Payment Successful! ✅',
+      message: `₹${finalAmount} paid for ${appt.service.name} (incl. 2% fee). Invoice: ${payment.invoiceNo}`,
       type: 'PAYMENT',
       link: `/dashboard`,
     },
   });
 
-  // Notify provider
-  if (paymentStatus === 'SUCCESS') {
-    await prisma.notification.create({
-      data: {
-        userId: appt.provider.userId,
-        title: 'Payment Received! 💰',
-        message: `₹${finalAmount} received for ${appt.service.name}.`,
-        type: 'PAYMENT',
-        link: '/dashboard',
-      },
-    });
-  }
+  await prisma.notification.create({
+    data: {
+      userId: appt.provider.userId,
+      title: 'Payment Received! 💰',
+      message: `₹${finalAmount} received for ${appt.service.name}.`,
+      type: 'PAYMENT',
+      link: '/dashboard',
+    },
+  });
 
   res.json({
     success: true,
     payment,
-    appointment: { id: appt.id, status: paymentStatus === 'SUCCESS' ? 'CONFIRMED' : appt.status },
+    appointment: { id: appt.id, status: 'CONFIRMED' },
   });
 });
 
